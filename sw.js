@@ -1,5 +1,5 @@
 // Service worker Trackline: aplikasi bisa dibuka offline setelah pernah dimuat sekali.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const APP_CACHE = 'trackline-app-' + VERSION;
 const TILE_CACHE = 'trackline-tiles';
 const MAX_TILES = 600; // batas jumlah petak peta yang disimpan

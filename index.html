@@ -59,6 +59,7 @@
   /* ---------- Peta ---------- */
   #map { position: fixed; inset: 0 0 var(--sheet-h, 320px) 0; z-index: 0; }
   .leaflet-container { font-family: var(--sans); }
+  .leaflet-control-attribution { background: transparent !important; box-shadow: none; font-size: 9px; opacity: .6; margin-top: calc(72px + env(safe-area-inset-top)) !important; }
 
   /* ---------- Bar atas ---------- */
   .topbar {
@@ -275,12 +276,14 @@
   // Inisialisasi
   // =====================================================
   window.addEventListener('load', () => {
-    map = L.map('map', { zoomControl: false }).setView([-6.200000, 106.816666], 13);
+    map = L.map('map', { zoomControl: false, attributionControl: false }).setView([-6.200000, 106.816666], 13);
 
     L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
       maxZoom: 19,
-      attribution: 'Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ'
+      attribution: '&copy; Esri'
     }).addTo(map);
+    // Atribusi Esri dibuat kecil dan transparan, di pojok kanan atas peta
+    L.control.attribution({ prefix: false, position: 'topright' }).addTo(map);
 
     // Garis rute: lapisan putih di bawah agar tetap terbaca di atas jalan
     trackCasing = L.polyline([], { color: '#ffffff', weight: 11, opacity: .95, lineCap: 'round', lineJoin: 'round' }).addTo(map);
