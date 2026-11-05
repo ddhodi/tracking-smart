@@ -76,6 +76,8 @@
     font: 600 14px/1 var(--sans);
     box-shadow: 0 1px 0 rgba(11,27,51,.08), 0 4px 14px rgba(11,27,51,.18);
   }
+  .install { position: fixed; z-index: 1100; left: 12px; top: calc(66px + env(safe-area-inset-top)); }
+  .install[hidden] { display: none; }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--mute); flex: none; }
   .dot[data-s="busy"] { background: var(--signal); box-shadow: 0 0 0 1.5px var(--ink); }
   .dot[data-s="on"]   { background: var(--ok); }
@@ -193,6 +195,7 @@
     <span id="gpsPillText">GPS siap</span>
   </div>
 </header>
+<button class="pill install" id="installBtn" type="button" hidden>Pasang aplikasi</button>
 
 <main class="sheet" id="sheet">
   <section class="hr" aria-label="Detak jantung">
@@ -251,7 +254,7 @@
   const HR_MEASUREMENT = '00002a37-0000-1000-8000-00805f9b34fb';
   const HR_WINDOW = 90000; // grafik menampilkan 90 detik terakhir
   const hrSamples = [];
-  const HR_STALE_MS = 15000; // tanpa data selama ini = anggap jam berhenti mengirim
+  const HR_STALE_MS = 45000; // tanpa data selama ini = anggap jam berhenti mengirim
   let btState = 'off';
   let lastHrAt = 0, hrWatchdog = null;
 
@@ -314,6 +317,29 @@
       navigator.serviceWorker.register('sw.js').catch((e) => console.warn('Service worker gagal:', e));
     });
   }
+
+  // Tombol "Pasang aplikasi": Chrome Android memberi event beforeinstallprompt,
+  // iOS Safari tidak punya event itu sehingga ditampilkan petunjuk manual.
+  let installEvent = null;
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    installEvent = e;
+    $('installBtn').hidden = false;
+  });
+  window.addEventListener('appinstalled', () => { installEvent = null; $('installBtn').hidden = true; });
+  if (isIOS && !isStandalone) $('installBtn').hidden = false;
+  $('installBtn').addEventListener('click', async () => {
+    if (installEvent) {
+      installEvent.prompt();
+      await installEvent.userChoice.catch(() => {});
+      installEvent = null;
+      $('installBtn').hidden = true;
+    } else if (isIOS) {
+      alert('Di Safari: ketuk tombol Bagikan, lalu pilih "Tambahkan ke Layar Utama".');
+    }
+  });
 
   $('btChip').addEventListener('click', () => $('btDialog').showModal());
   $('btClose').addEventListener('click', () => $('btDialog').close());
@@ -577,10 +603,11 @@
     $('btDot').dataset.s = state === 'wait' ? 'busy' : state;
     $('btStatus').textContent = text;
     const name = (bluetoothDevice && bluetoothDevice.name) || 'Smartwatch';
+    // Nama jam tetap tampil selama terhubung. Status data ditunjukkan lewat warna titik
+    // (hijau = data masuk, kuning = menunggu detak) dan teks di dialog.
     $('btChipText').textContent =
-      state === 'on' ? name + ' terhubung' :
+      (state === 'on' || state === 'wait') ? name + ' terhubung' :
       state === 'busy' ? 'Menghubungkan...' :
-      state === 'wait' ? 'Menunggu detak jantung...' :
       'Hubungkan smartwatch';
   }
 
