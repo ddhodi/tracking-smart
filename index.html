@@ -197,13 +197,13 @@
 <dialog id="btDialog" aria-labelledby="btTitle">
   <div class="dlg">
     <div class="dlg-head">
-      <h2 id="btTitle">Smartwatch ZL02D</h2>
+      <h2 id="btTitle">Smartwatch</h2>
       <button class="link" id="btClose" type="button">Tutup</button>
     </div>
 
-    <label for="macInput">MAC address terdaftar</label>
-    <input type="text" id="macInput" value="F6:95:4B:14:16:34" inputmode="text" autocapitalize="characters" autocomplete="off" spellcheck="false">
-    <p class="hint">Tersimpan: <span id="savedMacInfo">F6:95:4B:14:16:34</span>. Browser tidak bisa memilih perangkat lewat MAC, jadi pilih ZL02D dari daftar saat memindai.</p>
+    <label for="macInput">MAC address (opsional, hanya catatan)</label>
+    <input type="text" id="macInput" value="" placeholder="AA:BB:CC:DD:EE:FF" inputmode="text" autocapitalize="characters" autocomplete="off" spellcheck="false">
+    <p class="hint">Perangkat terakhir: <span id="savedMacInfo">belum ada</span>. Browser tidak bisa memilih perangkat lewat MAC, jadi pilih jam kamu dari daftar saat memindai.</p>
 
     <div class="btns">
       <button class="btn" id="connectBtn" type="button">Pindai dan hubungkan</button>
@@ -249,10 +249,9 @@
 
     try {
       const savedMac = localStorage.getItem('saved_mac_address');
-      if (savedMac) {
-        $('macInput').value = savedMac;
-        $('savedMacInfo').textContent = savedMac;
-      }
+      if (savedMac) $('macInput').value = savedMac;
+      const lastName = localStorage.getItem('last_device_name');
+      if (lastName) $('savedMacInfo').textContent = lastName;
     } catch (e) { /* storage bisa diblokir */ }
 
     // Tinggi panel menentukan tinggi peta
@@ -464,12 +463,12 @@
   });
 
   // =====================================================
-  // Bluetooth BLE (ZL02D)
+  // Bluetooth BLE (smartwatch apa pun yang mengirim detak jantung)
   // =====================================================
   function setBt(state, text) {
     $('btDot').dataset.s = state;
     $('btStatus').textContent = text;
-    const name = (bluetoothDevice && bluetoothDevice.name) || 'ZL02D';
+    const name = (bluetoothDevice && bluetoothDevice.name) || 'Smartwatch';
     $('btChipText').textContent =
       state === 'on' ? name + ' terhubung' :
       state === 'busy' ? 'Menghubungkan...' :
@@ -489,9 +488,12 @@
 
       if (useSaved && navigator.bluetooth.getDevices) {
         const pairedDevices = await navigator.bluetooth.getDevices();
-        const matched = pairedDevices.find((d) => d.name === 'ZL02D' || d.id === targetMac);
+        // Cocokkan dengan perangkat terakhir yang berhasil terhubung di browser ini
+        let lastId = null;
+        try { lastId = localStorage.getItem('last_device_id'); } catch (e) {}
+        const matched = pairedDevices.find((d) => d.id === lastId);
         if (!matched) {
-          setBt('err', 'Belum ada perangkat tersimpan. Gunakan "Pindai dan hubungkan" terlebih dahulu.');
+          setBt('err', 'Belum ada perangkat tersimpan di browser ini. Gunakan "Pindai dan hubungkan" terlebih dahulu.');
           return;
         }
         bluetoothDevice = matched;
@@ -502,17 +504,22 @@
         });
       }
 
-      if (targetMac) {
-        try { localStorage.setItem('saved_mac_address', targetMac); } catch (e) {}
-        $('savedMacInfo').textContent = targetMac;
-      }
+      const devName = bluetoothDevice.name || 'Smartwatch';
 
       bluetoothDevice.addEventListener('gattserverdisconnected', onDisconnected);
-      setBt('busy', 'Menghubungkan ke ' + (bluetoothDevice.name || 'ZL02D') + '...');
+      setBt('busy', 'Menghubungkan ke ' + devName + '...');
 
       gattServer = await bluetoothDevice.gatt.connect();
 
-      setBt('on', 'Terhubung ke ' + (bluetoothDevice.name || 'ZL02D') + '.');
+      // Simpan perangkat terakhir yang berhasil terhubung (per browser)
+      try {
+        localStorage.setItem('last_device_id', bluetoothDevice.id);
+        localStorage.setItem('last_device_name', devName);
+        if (targetMac) localStorage.setItem('saved_mac_address', targetMac);
+      } catch (e) {}
+      $('savedMacInfo').textContent = devName;
+
+      setBt('on', 'Terhubung ke ' + devName + '.');
       $('connectBtn').disabled = true;
       $('reconnectBtn').disabled = true;
       $('disconnectBtn').disabled = false;
