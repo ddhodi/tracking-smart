@@ -6,12 +6,29 @@
 <meta name="theme-color" content="#F2F5F8">
 <title>Smartwatch & GPS Trackline</title>
 
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800&family=Instrument+Sans:wght@400;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<meta name="application-name" content="Trackline">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Trackline">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="lib/leaflet/leaflet.css">
 
 <style>
+  /* Font disimpan lokal agar tampil sama saat offline */
+  @font-face { font-family: 'Big Shoulders Display'; font-style: normal; font-weight: 700; font-display: swap;
+    src: url('lib/fonts/big-shoulders-display-latin-700-normal.woff2') format('woff2'); }
+  @font-face { font-family: 'Big Shoulders Display'; font-style: normal; font-weight: 800; font-display: swap;
+    src: url('lib/fonts/big-shoulders-display-latin-800-normal.woff2') format('woff2'); }
+  @font-face { font-family: 'Instrument Sans'; font-style: normal; font-weight: 400; font-display: swap;
+    src: url('lib/fonts/instrument-sans-latin-400-normal.woff2') format('woff2'); }
+  @font-face { font-family: 'Instrument Sans'; font-style: normal; font-weight: 600; font-display: swap;
+    src: url('lib/fonts/instrument-sans-latin-600-normal.woff2') format('woff2'); }
+  @font-face { font-family: 'Instrument Sans'; font-style: normal; font-weight: 700; font-display: swap;
+    src: url('lib/fonts/instrument-sans-latin-700-normal.woff2') format('woff2'); }
+
   :root {
     /* Warna: kertas nomor dada (bib), tinta navy, biru lintasan, merah denyut, kuning sinyal */
     --bib: #F2F5F8;
@@ -111,8 +128,9 @@
   }
   .foot .pts { flex: none; font-variant-numeric: tabular-nums; }
 
+  .run-row { display: flex; gap: 10px; margin-top: 12px; }
   .run {
-    width: 100%; min-height: 64px; margin-top: 12px;
+    flex: 1; min-width: 0; min-height: 64px;
     border: 0; border-radius: 18px;
     background: var(--signal); color: var(--ink);
     font: 700 20px var(--sans);
@@ -121,6 +139,11 @@
   }
   .run:active { transform: scale(.98); }
   .run[data-running="true"] { background: var(--ink); color: var(--bib); }
+  .run.finish { flex: none; width: 34%; background: var(--bib); color: var(--pulse); }
+  /* Saat dijeda: semua angka diredupkan sebagai penanda ditahan */
+  .sheet[data-paused="true"] .hr-num,
+  .sheet[data-paused="true"] .trace,
+  .sheet[data-paused="true"] .m b { opacity: .5; }
 
   /* ---------- Dialog Bluetooth ---------- */
   dialog {
@@ -191,7 +214,10 @@
     <span class="pts"><span id="pointCount">0</span> titik</span>
   </div>
 
-  <button class="run" id="runBtn" type="button" data-running="false">Mulai lari</button>
+  <div class="run-row">
+    <button class="run" id="runBtn" type="button" data-running="false">Mulai lari</button>
+    <button class="run finish" id="finishBtn" type="button" hidden>Selesai</button>
+  </div>
 </main>
 
 <dialog id="btDialog" aria-labelledby="btTitle">
@@ -215,7 +241,7 @@
   </div>
 </dialog>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="lib/leaflet/leaflet.js"></script>
 <script>
   const $ = (id) => document.getElementById(id);
 
@@ -234,7 +260,13 @@
   let watchId = null;
   let trackCoordinates = [];
   let totalDistance = 0; // km
-  let startedAt = 0, timerId = null, wakeLock = null;
+  let timerId = null, wakeLock = null;
+  let runState = 'idle';            // 'idle' | 'running' | 'paused'
+  let elapsedBefore = 0;            // ms waktu lari yang sudah terkumpul sebelum segmen ini
+  let segmentStart = 0;             // awal segmen lari yang sedang berjalan
+  let segments = [[]];              // rute dipecah per jeda supaya tidak ada garis lurus lintas jeda
+  let isNewSegment = false;
+  let hrFrozenAt = 0;               // waktu saat grafik detak jantung dibekukan (0 = tidak beku)
 
   // =====================================================
   // Inisialisasi
@@ -270,7 +302,19 @@
     setInterval(drawTrace, 1000);
   });
 
-  $('runBtn').addEventListener('click', () => (watchId === null ? startTracking() : stopTracking()));
+  $('runBtn').addEventListener('click', () => {
+    if (runState === 'idle') startTracking();
+    else if (runState === 'running') pauseTracking();
+    else resumeTracking();
+  });
+  $('finishBtn').addEventListener('click', stopTracking);
+  // PWA: simpan aplikasi agar bisa dibuka offline (butuh HTTPS atau localhost)
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch((e) => console.warn('Service worker gagal:', e));
+    });
+  }
+
   $('btChip').addEventListener('click', () => $('btDialog').showModal());
   $('btClose').addEventListener('click', () => $('btDialog').close());
   $('btDialog').addEventListener('click', (e) => { if (e.target === $('btDialog')) $('btDialog').close(); });
@@ -286,10 +330,21 @@
     $('gpsPillText').textContent = text;
   }
 
-  function setRunning(running) {
+  function setRunState(state) {
+    runState = state;
     const btn = $('runBtn');
-    btn.dataset.running = String(running);
-    btn.textContent = running ? 'Selesai' : 'Mulai lari';
+    btn.dataset.running = state === 'running' ? 'true' : state === 'paused' ? 'paused' : 'false';
+    btn.textContent = state === 'running' ? 'Jeda' : state === 'paused' ? 'Lanjut' : 'Mulai lari';
+    $('finishBtn').hidden = state === 'idle';
+    $('sheet').dataset.paused = String(state === 'paused');
+  }
+
+  function beginGpsWatch() {
+    watchId = navigator.geolocation.watchPosition(onGpsPositionSuccess, onGpsPositionError, {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 0
+    });
   }
 
   function startTracking() {
@@ -300,6 +355,8 @@
     }
 
     trackCoordinates = [];
+    segments = [[]];
+    isNewSegment = false;
     totalDistance = 0;
     trackCasing.setLatLngs([]);
     trackLine.setLatLngs([]);
@@ -312,20 +369,57 @@
 
     $('gpsStatus').textContent = 'Meminta izin dan mencari sinyal GPS...';
     setGpsPill('busy', 'Mencari GPS');
-    setRunning(true);
+    setRunState('running');
 
-    startedAt = Date.now();
+    elapsedBefore = 0;
+    segmentStart = Date.now();
     timerId = setInterval(tick, 1000);
     requestWakeLock();
+    beginGpsWatch();
+  }
 
-    watchId = navigator.geolocation.watchPosition(onGpsPositionSuccess, onGpsPositionError, {
-      enableHighAccuracy: true,
-      timeout: 15000,
-      maximumAge: 0
-    });
+  // Jeda: waktu, jarak, pace, GPS, dan detak jantung semuanya ditahan
+  function pauseTracking() {
+    if (runState !== 'running') return;
+    elapsedBefore += Date.now() - segmentStart;
+    segmentStart = 0;
+    if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+    clearInterval(timerId);
+    timerId = null;
+    releaseWakeLock();
+    setRunState('paused');
+    hrFrozenAt = Date.now();
+    $('beat').classList.remove('live');
+    tick();
+    setGpsPill('off', 'Dijeda');
+    $('gpsStatus').textContent = 'Dijeda. Waktu, jarak, pace, dan detak jantung ditahan.';
+  }
+
+  function resumeTracking() {
+    if (runState !== 'paused') return;
+    segmentStart = Date.now();
+    unfreezeHr();
+    isNewSegment = trackCoordinates.length > 0; // titik pertama setelah jeda tidak menambah jarak
+    setRunState('running');
+    timerId = setInterval(tick, 1000);
+    requestWakeLock();
+    setGpsPill('busy', 'Mencari GPS');
+    $('gpsStatus').textContent = 'Melanjutkan, mencari sinyal GPS...';
+    beginGpsWatch();
+  }
+
+  // Lanjutkan grafik detak jantung tanpa celah waktu akibat jeda
+  function unfreezeHr() {
+    if (!hrFrozenAt) return;
+    const gap = Date.now() - hrFrozenAt;
+    hrSamples.forEach((s) => { s.t += gap; });
+    hrFrozenAt = 0;
+    lastHrAt = Date.now();
+    if (btState === 'on' && hrSamples.length) $('beat').classList.add('live');
   }
 
   function onGpsPositionSuccess(position) {
+    if (runState !== 'running') return;
     const lat = position.coords.latitude;
     const lng = position.coords.longitude;
     const accuracy = position.coords.accuracy; // meter
@@ -339,7 +433,7 @@
     }
     setGpsPill('ok', 'GPS ±' + Math.round(accuracy) + ' m');
 
-    if (trackCoordinates.length > 0) {
+    if (trackCoordinates.length > 0 && !isNewSegment) {
       const prev = trackCoordinates[trackCoordinates.length - 1];
       const d = calculateDistance(prev[0], prev[1], lat, lng); // km
 
@@ -350,9 +444,12 @@
       $('distanceValue').textContent = totalDistance.toFixed(2);
     }
 
+    // Setelah jeda mulai segmen rute baru (jarak selama jeda tidak dihitung)
+    if (isNewSegment) { segments.push([]); isNewSegment = false; }
+    segments[segments.length - 1].push(newLatLng);
     trackCoordinates.push(newLatLng);
-    trackCasing.addLatLng(newLatLng);
-    trackLine.addLatLng(newLatLng);
+    trackCasing.setLatLngs(segments);
+    trackLine.setLatLngs(segments);
 
     if (trackCoordinates.length === 1) {
       startMarker = L.circleMarker(newLatLng, { radius: 6, color: '#fff', weight: 3, fillColor: '#0B1B33', fillOpacity: 1 }).addTo(map);
@@ -400,11 +497,13 @@
     clearInterval(timerId);
     timerId = null;
     releaseWakeLock();
-    setRunning(false);
+    unfreezeHr();
+    segmentStart = 0;
+    setRunState('idle');
   }
 
   function stopTracking() {
-    const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+    const elapsed = Math.floor(getElapsedMs() / 1000);
     endSession();
     setGpsPill('off', 'GPS siap');
     $('gpsStatus').textContent = 'Selesai: ' + totalDistance.toFixed(2) + ' km dalam ' + fmtTime(elapsed) + '.';
@@ -435,9 +534,13 @@
     return h > 0 ? h + ':' + mm + ':' + ss : mm + ':' + ss;
   }
 
+  function getElapsedMs() {
+    return elapsedBefore + (runState === 'running' && segmentStart ? Date.now() - segmentStart : 0);
+  }
+
   function tick() {
-    if (!startedAt) return;
-    const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+    if (runState === 'idle') return;
+    const elapsed = Math.floor(getElapsedMs() / 1000);
     $('timeValue').textContent = fmtTime(elapsed);
 
     if (totalDistance >= 0.05) {
@@ -463,7 +566,7 @@
     if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
   }
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && watchId !== null) requestWakeLock();
+    if (document.visibilityState === 'visible' && runState === 'running') requestWakeLock();
   });
 
   // =====================================================
@@ -574,7 +677,7 @@
   function startHrWatchdog() {
     clearInterval(hrWatchdog);
     hrWatchdog = setInterval(() => {
-      if (btState !== 'on') return;
+      if (btState !== 'on' || runState === 'paused') return;
       if (Date.now() - lastHrAt > HR_STALE_MS) {
         $('hrValue').textContent = '--';
         $('beat').classList.remove('live');
@@ -584,6 +687,7 @@
   }
 
   function pushHeartRate(hr) {
+    if (runState === 'paused') return; // data diabaikan selama jeda
     lastHrAt = Date.now();
     if (btState !== 'on') {
       const n = (bluetoothDevice && bluetoothDevice.name) || 'jam';
@@ -647,7 +751,7 @@
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
     }
 
-    const now = Date.now();
+    const now = hrFrozenAt || Date.now(); // beku saat jeda
     while (hrSamples.length && now - hrSamples[0].t > HR_WINDOW) hrSamples.shift();
 
     if (hrSamples.length < 2) {
