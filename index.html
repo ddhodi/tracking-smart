@@ -1,310 +1,659 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smartwatch & GPS Trackline</title>
-    
-    <!-- CSS Leaflet Peta -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    
-    <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 15px; background: #f4f4f9; }
-        .card { background: #fff; padding: 15px; margin-bottom: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        h3 { margin-top: 0; }
-        input[type="text"] { width: 100%; padding: 10px; box-sizing: border-box; margin: 5px 0 10px; border: 1px solid #ccc; border-radius: 4px; text-align: center; font-weight: bold; }
-        button { background: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; width: 100%; font-size: 14px; margin-top: 5px; font-weight: bold; }
-        button.secondary { background: #6c757d; }
-        button.success { background: #28a745; }
-        button.stop { background: #dc3545; }
-        button:disabled { background: #cccccc; cursor: not-allowed; }
-        button:hover:not(:disabled) { opacity: 0.9; }
-        .status { font-weight: bold; margin-top: 8px; color: #555; font-size: 13px; line-height: 1.4; }
-        .hr-box { font-size: 32px; font-weight: bold; color: #e74c3c; margin: 5px 0; text-align: center; }
-        #map { height: 350px; width: 100%; border-radius: 8px; margin-top: 10px; }
-        .stats { display: flex; justify-content: space-around; margin-top: 10px; text-align: center; }
-        .stat-item { background: #f8f9fa; padding: 10px; border-radius: 6px; width: 45%; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#F2F5F8">
+<title>Smartwatch & GPS Trackline</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800&family=Instrument+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+
+<style>
+  :root {
+    /* Warna: kertas nomor dada (bib), tinta navy, biru lintasan, merah denyut, kuning sinyal */
+    --bib: #F2F5F8;
+    --ink: #0B1B33;
+    --track: #1D4ED8;
+    --pulse: #E11D48;
+    --signal: #FFD60A;
+    --mute: #5B6B82;
+    --line: #D5DCE6;
+    --ok: #12A150;
+
+    --display: 'Big Shoulders Display', 'Arial Narrow', Impact, sans-serif;
+    --sans: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: var(--sans);
+    background: var(--bib);
+    color: var(--ink);
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button { font-family: inherit; cursor: pointer; }
+  :focus-visible { outline: 3px solid var(--track); outline-offset: 2px; }
+
+  /* ---------- Peta ---------- */
+  #map { position: fixed; inset: 0 0 var(--sheet-h, 320px) 0; z-index: 0; }
+  .leaflet-container { font-family: var(--sans); }
+
+  /* ---------- Bar atas ---------- */
+  .topbar {
+    position: fixed; z-index: 1100;
+    top: calc(12px + env(safe-area-inset-top)); left: 12px; right: 12px;
+    display: flex; justify-content: space-between; gap: 8px;
+    pointer-events: none;
+  }
+  .topbar > * { pointer-events: auto; }
+  .pill {
+    display: flex; align-items: center; gap: 8px;
+    min-height: 44px; padding: 0 16px 0 14px;
+    background: var(--bib); color: var(--ink);
+    border: 0; border-radius: 999px;
+    font: 600 14px/1 var(--sans);
+    box-shadow: 0 1px 0 rgba(11,27,51,.08), 0 4px 14px rgba(11,27,51,.18);
+  }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--mute); flex: none; }
+  .dot[data-s="busy"] { background: var(--signal); box-shadow: 0 0 0 1.5px var(--ink); }
+  .dot[data-s="on"]   { background: var(--ok); }
+  .dot[data-s="err"]  { background: var(--pulse); }
+
+  /* ---------- Panel bawah ---------- */
+  .sheet {
+    position: fixed; z-index: 1000; left: 0; right: 0; bottom: 0;
+    max-width: 560px; margin: 0 auto;
+    padding: 20px 20px calc(16px + env(safe-area-inset-bottom));
+    background: var(--bib);
+    border-radius: 24px 24px 0 0;
+    box-shadow: 0 -6px 24px rgba(11,27,51,.16);
+  }
+
+  /* Detak jantung: angka besar seperti nomor dada, grafik berjalan di sebelahnya */
+  .hr { display: flex; align-items: center; gap: 16px; }
+  .hr-main { flex: none; min-width: 128px; }
+  .hr-label { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--mute); }
+  .beat { width: 10px; height: 10px; border-radius: 50%; background: var(--pulse); opacity: .25; }
+  .beat.live { animation: beat var(--beat, 1s) ease-out infinite; }
+  @keyframes beat {
+    0%   { opacity: 1; transform: scale(1.5); }
+    60%, 100% { opacity: .25; transform: scale(1); }
+  }
+  .hr-num {
+    margin-top: 6px;
+    font: 800 92px/.9 var(--display);
+    font-variant-numeric: tabular-nums;
+  }
+  .hr-num small { margin-left: 4px; font: 700 20px var(--display); color: var(--mute); }
+  .trace { flex: 1; min-width: 0; height: 92px; }
+  #hrTrace { display: block; width: 100%; height: 100%; }
+
+  /* Metrik lari */
+  .metrics {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    margin-top: 16px; padding-top: 14px;
+    border-top: 1px solid var(--line);
+  }
+  .m { padding-left: 14px; border-left: 1px solid var(--line); }
+  .m:first-child { padding-left: 0; border-left: 0; }
+  .m b { display: block; font: 700 40px/1 var(--display); font-variant-numeric: tabular-nums; }
+  .m span { display: block; margin-top: 4px; font-size: 13px; color: var(--mute); }
+
+  .foot {
+    display: flex; justify-content: space-between; gap: 12px;
+    min-height: 18px; margin-top: 12px;
+    font-size: 13px; line-height: 1.35; color: var(--mute);
+  }
+  .foot .pts { flex: none; font-variant-numeric: tabular-nums; }
+
+  .run {
+    width: 100%; min-height: 64px; margin-top: 12px;
+    border: 0; border-radius: 18px;
+    background: var(--signal); color: var(--ink);
+    font: 700 20px var(--sans);
+    box-shadow: inset 0 0 0 2px var(--ink);
+    transition: transform .12s ease;
+  }
+  .run:active { transform: scale(.98); }
+  .run[data-running="true"] { background: var(--ink); color: var(--bib); }
+
+  /* ---------- Dialog Bluetooth ---------- */
+  dialog {
+    width: 100%; max-width: 560px; margin: auto auto 0;
+    padding: 0; border: 0; border-radius: 24px 24px 0 0;
+    background: var(--bib); color: var(--ink);
+  }
+  dialog::backdrop { background: rgba(11,27,51,.5); }
+  .dlg { padding: 22px 20px calc(20px + env(safe-area-inset-bottom)); }
+  .dlg-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .dlg h2 { font: 800 30px/1 var(--display); }
+  .link { min-height: 44px; padding: 0 4px; border: 0; background: none; font: 600 15px var(--sans); color: var(--track); }
+  .dlg label { display: block; margin-top: 18px; font-size: 14px; font-weight: 600; color: var(--mute); }
+  .dlg input {
+    width: 100%; min-height: 52px; margin-top: 6px; padding: 0 14px;
+    border: 2px solid var(--ink); border-radius: 12px; background: #fff;
+    font: 600 18px var(--sans); letter-spacing: .04em; text-align: center; color: var(--ink);
+  }
+  .hint { margin-top: 8px; font-size: 13px; line-height: 1.4; color: var(--mute); }
+  .btns { display: grid; gap: 10px; margin-top: 18px; }
+  .btn {
+    min-height: 52px; border-radius: 14px; font: 700 16px var(--sans);
+    border: 2px solid var(--ink); background: var(--ink); color: var(--bib);
+  }
+  .btn.ghost { background: transparent; color: var(--ink); }
+  .btn.danger { background: transparent; color: var(--pulse); border-color: var(--pulse); }
+  .btn:disabled { opacity: .35; cursor: not-allowed; }
+  .bt-status { margin-top: 16px; min-height: 36px; font-size: 14px; font-weight: 600; line-height: 1.4; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .beat.live { animation: none; opacity: 1; }
+    .run { transition: none; }
+  }
+</style>
 </head>
 <body>
 
-    <h2 style="text-align: center;">Smartwatch & GPS Trackline</h2>
+<div id="map" role="application" aria-label="Peta rute lari"></div>
 
-    <!-- 1. KONTROL BLUETOOTH & SENSOR SMARTWATCH -->
-    <div class="card">
-        <h3>1. Sensor Smartwatch (ZL02D)</h3>
-        <label for="macInput">MAC Address Terdaftar:</label>
-        <input type="text" id="macInput" value="F6:95:4B:14:16:34" placeholder="F6:95:4B:14:16:34">
+<header class="topbar">
+  <button class="pill" id="btChip" type="button" aria-haspopup="dialog">
+    <span class="dot" id="btDot" data-s="off"></span>
+    <span id="btChipText">Hubungkan smartwatch</span>
+  </button>
+  <div class="pill" id="gpsPill" role="status">
+    <span class="dot" id="gpsDot" data-s="off"></span>
+    <span id="gpsPillText">GPS siap</span>
+  </div>
+</header>
 
-        <button id="connectBtn" onclick="connectHeartRateSensor(false)">Scan & Hubungkan Bluetooth</button>
-        <button id="reconnectBtn" class="secondary" onclick="connectHeartRateSensor(true)">Hubungkan Langsung (Saved ID)</button>
-        <button id="disconnectBtn" class="stop" onclick="disconnectDevice()" disabled>Putuskan Bluetooth</button>
-        
-        <div class="status" id="btStatus">Status BT: Terputus</div>
-        
-        <div class="stats">
-            <div class="stat-item">
-                <div>Detak Jantung</div>
-                <div class="hr-box" id="hrValue">--</div>
-                <small>BPM</small>
-            </div>
-            <div class="stat-item">
-                <div>Perangkat</div>
-                <div style="font-weight: bold; margin-top: 10px;" id="deviceName">ZL02D</div>
-                <small id="savedMacInfo">F6:95:4B:14:16:34</small>
-            </div>
-        </div>
+<main class="sheet" id="sheet">
+  <section class="hr" aria-label="Detak jantung">
+    <div class="hr-main">
+      <div class="hr-label"><span class="beat" id="beat"></span>Detak jantung</div>
+      <div class="hr-num"><span id="hrValue">--</span><small>bpm</small></div>
+    </div>
+    <div class="trace"><canvas id="hrTrace" aria-label="Grafik detak jantung 90 detik terakhir"></canvas></div>
+  </section>
+
+  <section class="metrics" aria-label="Statistik lari">
+    <div class="m"><b id="distanceValue">0.00</b><span>Jarak (km)</span></div>
+    <div class="m"><b id="timeValue">00:00</b><span>Waktu</span></div>
+    <div class="m"><b id="paceValue">--:--</b><span>Pace (/km)</span></div>
+  </section>
+
+  <div class="foot">
+    <span id="gpsStatus" aria-live="polite">Pastikan izin lokasi aktif sebelum mulai.</span>
+    <span class="pts"><span id="pointCount">0</span> titik</span>
+  </div>
+
+  <button class="run" id="runBtn" type="button" data-running="false">Mulai lari</button>
+</main>
+
+<dialog id="btDialog" aria-labelledby="btTitle">
+  <div class="dlg">
+    <div class="dlg-head">
+      <h2 id="btTitle">Smartwatch ZL02D</h2>
+      <button class="link" id="btClose" type="button">Tutup</button>
     </div>
 
-    <!-- 2. KONTROL GPS & PETA TRACKLINE -->
-    <div class="card">
-        <h3>2. Pelacakan Rute Lari (Trackline GPS HP)</h3>
-        <button id="startGpsBtn" class="success" onclick="startTracking()">Mulai Lari (Start Trackline)</button>
-        <button id="stopGpsBtn" class="stop" onclick="stopTracking()" disabled>Selesai / Stop</button>
-        
-        <div class="status" id="gpsStatus">Status GPS: Siap (Pastikan izin lokasi aktif)</div>
-        
-        <div class="stats">
-            <div class="stat-item">
-                <div>Jarak Tempuh</div>
-                <div style="font-size: 20px; font-weight: bold;" id="distanceValue">0.00</div>
-                <small>km</small>
-            </div>
-            <div class="stat-item">
-                <div>Titik Koordinat</div>
-                <div style="font-size: 20px; font-weight: bold;" id="pointCount">0</div>
-                <small>titik</small>
-            </div>
-        </div>
+    <label for="macInput">MAC address terdaftar</label>
+    <input type="text" id="macInput" value="F6:95:4B:14:16:34" inputmode="text" autocapitalize="characters" autocomplete="off" spellcheck="false">
+    <p class="hint">Tersimpan: <span id="savedMacInfo">F6:95:4B:14:16:34</span>. Browser tidak bisa memilih perangkat lewat MAC, jadi pilih ZL02D dari daftar saat memindai.</p>
 
-        <div id="map"></div>
+    <div class="btns">
+      <button class="btn" id="connectBtn" type="button">Pindai dan hubungkan</button>
+      <button class="btn ghost" id="reconnectBtn" type="button">Hubungkan langsung (tersimpan)</button>
+      <button class="btn danger" id="disconnectBtn" type="button" disabled>Putuskan Bluetooth</button>
     </div>
+    <p class="bt-status" id="btStatus" role="status" aria-live="polite">Terputus.</p>
+  </div>
+</dialog>
 
-    <!-- JS Leaflet Peta -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  const $ = (id) => document.getElementById(id);
 
-    <script>
-        // --- VARIABEL BLUETOOTH ---
-        let bluetoothDevice = null;
-        let gattServer = null;
+  // --- Bluetooth ---
+  let bluetoothDevice = null;
+  let gattServer = null;
+  const HR_MEASUREMENT = '00002a37-0000-1000-8000-00805f9b34fb';
+  const HR_WINDOW = 90000; // grafik menampilkan 90 detik terakhir
+  const hrSamples = [];
 
-        // --- VARIABEL GPS & PETA ---
-        let map = null;
-        let trackPolyline = null;
-        let watchId = null;
-        let trackCoordinates = [];
-        let totalDistance = 0; // kilometer
+  // --- GPS & peta ---
+  let map = null, trackCasing = null, trackLine = null, posMarker = null, startMarker = null;
+  let watchId = null;
+  let trackCoordinates = [];
+  let totalDistance = 0; // km
+  let startedAt = 0, timerId = null, wakeLock = null;
 
-        // Inisialisasi Peta Leaflet (Menggunakan Esri World Street Map yang Bebas API Key)
-        window.addEventListener('load', () => {
-            map = L.map('map').setView([-6.200000, 106.816666], 13);
+  // =====================================================
+  // Inisialisasi
+  // =====================================================
+  window.addEventListener('load', () => {
+    map = L.map('map', { zoomControl: false }).setView([-6.200000, 106.816666], 13);
 
-            L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
-                maxZoom: 19,
-                attribution: 'Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ'
-            }).addTo(map);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 19,
+      attribution: 'Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ'
+    }).addTo(map);
 
-            trackPolyline = L.polyline([], { color: '#007bff', weight: 5 }).addTo(map);
+    // Garis rute: lapisan putih di bawah agar tetap terbaca di atas jalan
+    trackCasing = L.polyline([], { color: '#ffffff', weight: 11, opacity: .95, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+    trackLine   = L.polyline([], { color: '#1D4ED8', weight: 6, lineCap: 'round', lineJoin: 'round' }).addTo(map);
 
-            const savedMac = localStorage.getItem('saved_mac_address');
-            if (savedMac) {
-                document.getElementById('macInput').value = savedMac;
-                document.getElementById('savedMacInfo').innerText = savedMac;
-            }
-        });
+    try {
+      const savedMac = localStorage.getItem('saved_mac_address');
+      if (savedMac) {
+        $('macInput').value = savedMac;
+        $('savedMacInfo').textContent = savedMac;
+      }
+    } catch (e) { /* storage bisa diblokir */ }
 
-        // ==========================================
-        // FITUR 1: LOGIKA TRACKLINE GPS (HP)
-        // ==========================================
-        function startTracking() {
-            if (!navigator.geolocation) {
-                alert("Browser/HP Anda tidak mendukung Geolocation GPS.");
-                return;
-            }
+    // Tinggi panel menentukan tinggi peta
+    const ro = new ResizeObserver(() => {
+      document.documentElement.style.setProperty('--sheet-h', $('sheet').offsetHeight + 'px');
+      map.invalidateSize();
+      drawTrace();
+    });
+    ro.observe($('sheet'));
 
-            trackCoordinates = [];
-            totalDistance = 0;
-            trackPolyline.setLatLngs([]);
-            document.getElementById('distanceValue').innerText = "0.00";
-            document.getElementById('pointCount').innerText = "0";
+    drawTrace();
+    setInterval(drawTrace, 1000);
+  });
 
-            document.getElementById('gpsStatus').innerText = "Status GPS: Meminta izin & mencari sinyal lokasi...";
-            document.getElementById('startGpsBtn').disabled = true;
-            document.getElementById('stopGpsBtn').disabled = false;
+  $('runBtn').addEventListener('click', () => (watchId === null ? startTracking() : stopTracking()));
+  $('btChip').addEventListener('click', () => $('btDialog').showModal());
+  $('btClose').addEventListener('click', () => $('btDialog').close());
+  $('btDialog').addEventListener('click', (e) => { if (e.target === $('btDialog')) $('btDialog').close(); });
+  $('connectBtn').addEventListener('click', () => connectHeartRateSensor(false));
+  $('reconnectBtn').addEventListener('click', () => connectHeartRateSensor(true));
+  $('disconnectBtn').addEventListener('click', disconnectDevice);
 
-            watchId = navigator.geolocation.watchPosition(
-                onGpsPositionSuccess,
-                onGpsPositionError,
-                {
-                    enableHighAccuracy: true,
-                    timeout: 15000,
-                    maximumAge: 0
-                }
-            );
-        }
+  // =====================================================
+  // GPS
+  // =====================================================
+  function setGpsPill(state, text) {
+    $('gpsDot').dataset.s = state;
+    $('gpsPillText').textContent = text;
+  }
 
-        function onGpsPositionSuccess(position) {
-    const lat = position.coords.latitude;
-    const lng = position.coords.longitude;
-    const accuracy = position.coords.accuracy; // Akurasi sinyal dalam meter
-    const newLatLng = [lat, lng];
+  function setRunning(running) {
+    const btn = $('runBtn');
+    btn.dataset.running = String(running);
+    btn.textContent = running ? 'Selesai' : 'Mulai lari';
+  }
 
-    // 1. Abaikan jika akurasi GPS buruk (di atas 20 meter, biasanya lompat-lompat)
-    if (accuracy > 20) {
-        console.log("GPS diabaikan karena akurasi buruk:", accuracy);
-        return;
+  function startTracking() {
+    if (!navigator.geolocation) {
+      $('gpsStatus').textContent = 'Browser atau HP ini tidak mendukung GPS.';
+      setGpsPill('err', 'GPS tidak ada');
+      return;
     }
 
-    if (trackCoordinates.length > 0) {
-        const prevPoint = trackCoordinates[trackCoordinates.length - 1];
-        const d = calculateDistance(prevPoint[0], prevPoint[1], lat, lng); // dalam KM
-        
-        // 2. Filter Jitter: Hanya catat jika perpindahan jarak > 3 meter (0.003 km)
-        // Ini mencegah jarak bertambah sendiri saat HP diletakkan diam / sinyal goyang
-        if (d < 0.003) {
-            return; 
-        }
+    trackCoordinates = [];
+    totalDistance = 0;
+    trackCasing.setLatLngs([]);
+    trackLine.setLatLngs([]);
+    if (posMarker) { map.removeLayer(posMarker); posMarker = null; }
+    if (startMarker) { map.removeLayer(startMarker); startMarker = null; }
+    $('distanceValue').textContent = '0.00';
+    $('pointCount').textContent = '0';
+    $('timeValue').textContent = '00:00';
+    $('paceValue').textContent = '--:--';
 
-        totalDistance += d;
-        document.getElementById('distanceValue').innerText = totalDistance.toFixed(2);
+    $('gpsStatus').textContent = 'Meminta izin dan mencari sinyal GPS...';
+    setGpsPill('busy', 'Mencari GPS');
+    setRunning(true);
+
+    startedAt = Date.now();
+    timerId = setInterval(tick, 1000);
+    requestWakeLock();
+
+    watchId = navigator.geolocation.watchPosition(onGpsPositionSuccess, onGpsPositionError, {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 0
+    });
+  }
+
+  function onGpsPositionSuccess(position) {
+    const lat = position.coords.latitude;
+    const lng = position.coords.longitude;
+    const accuracy = position.coords.accuracy; // meter
+    const newLatLng = [lat, lng];
+
+    // 1. Abaikan jika akurasi buruk (di atas 20 m biasanya melompat-lompat)
+    if (accuracy > 20) {
+      setGpsPill('busy', 'GPS ±' + Math.round(accuracy) + ' m');
+      $('gpsStatus').textContent = 'Sinyal masih lemah, menunggu akurasi di bawah 20 m.';
+      return;
+    }
+    setGpsPill('ok', 'GPS ±' + Math.round(accuracy) + ' m');
+
+    if (trackCoordinates.length > 0) {
+      const prev = trackCoordinates[trackCoordinates.length - 1];
+      const d = calculateDistance(prev[0], prev[1], lat, lng); // km
+
+      // 2. Filter jitter: catat hanya jika bergeser lebih dari 3 m
+      if (d < 0.003) return;
+
+      totalDistance += d;
+      $('distanceValue').textContent = totalDistance.toFixed(2);
     }
 
     trackCoordinates.push(newLatLng);
-    trackPolyline.addLatLng(newLatLng);
-    map.setView(newLatLng, 17);
+    trackCasing.addLatLng(newLatLng);
+    trackLine.addLatLng(newLatLng);
 
-    document.getElementById('gpsStatus').innerText = "Status GPS: Berhasil melacak rute lari!";
-    document.getElementById('pointCount').innerText = trackCoordinates.length;
-}
+    if (trackCoordinates.length === 1) {
+      startMarker = L.circleMarker(newLatLng, { radius: 6, color: '#fff', weight: 3, fillColor: '#0B1B33', fillOpacity: 1 }).addTo(map);
+      posMarker = L.circleMarker(newLatLng, { radius: 9, color: '#fff', weight: 3, fillColor: '#E11D48', fillOpacity: 1 }).addTo(map);
+      map.setView(newLatLng, 17);
+    } else {
+      posMarker.setLatLng(newLatLng);
+      map.panTo(newLatLng); // zoom tidak dipaksa agar pengguna bebas memperbesar peta
+    }
 
-        function onGpsPositionError(error) {
-            console.warn("GPS Error Code:", error.code, "Message:", error.message);
-            let pesan = "Gagal mendapatkan GPS. ";
-            if (error.code === 1) {
-                pesan += "Izin lokasi ditolak. Periksa ikon gembok di samping URL browser Anda lalu izinkan akses Lokasi.";
-            } else if (error.code === 2) {
-                pesan += "Posisi tidak tersedia (Coba keluar ruangan / dekat jendela).";
-            } else if (error.code === 3) {
-                pesan += "Waktu permintaan habis (Timeout).";
-            } else {
-                pesan += error.message;
+    $('gpsStatus').textContent = 'Merekam rute lari.';
+    $('pointCount').textContent = trackCoordinates.length;
+    tick();
+  }
+
+  function onGpsPositionError(error) {
+    console.warn('GPS Error Code:', error.code, 'Message:', error.message);
+    let pesan = 'Gagal mendapatkan GPS. ';
+    if (error.code === 1) {
+      pesan += 'Izin lokasi ditolak. Ketuk ikon gembok di samping URL lalu izinkan akses Lokasi.';
+    } else if (error.code === 2) {
+      pesan += 'Posisi tidak tersedia. Coba keluar ruangan atau dekat jendela.';
+    } else if (error.code === 3) {
+      pesan += 'Waktu permintaan habis, mencoba lagi.';
+    } else {
+      pesan += error.message;
+    }
+    $('gpsStatus').textContent = pesan;
+
+    if (error.code === 1) {
+      // Izin ditolak: tidak ada gunanya lanjut
+      endSession();
+      setGpsPill('err', 'Izin ditolak');
+    } else {
+      // Timeout atau posisi sementara hilang: watchPosition tetap mencoba
+      setGpsPill('busy', 'Mencari GPS');
+    }
+  }
+
+  function endSession() {
+    if (watchId !== null) {
+      navigator.geolocation.clearWatch(watchId);
+      watchId = null;
+    }
+    clearInterval(timerId);
+    timerId = null;
+    releaseWakeLock();
+    setRunning(false);
+  }
+
+  function stopTracking() {
+    const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+    endSession();
+    setGpsPill('off', 'GPS siap');
+    $('gpsStatus').textContent = 'Selesai: ' + totalDistance.toFixed(2) + ' km dalam ' + fmtTime(elapsed) + '.';
+    if (trackCoordinates.length > 1) {
+      map.fitBounds(trackLine.getBounds(), { padding: [40, 40] });
+    }
+  }
+
+  function calculateDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
+
+  // Waktu dan pace
+  function fmtTime(sec) {
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    const mm = String(m).padStart(2, '0');
+    const ss = String(s).padStart(2, '0');
+    return h > 0 ? h + ':' + mm + ':' + ss : mm + ':' + ss;
+  }
+
+  function tick() {
+    if (!startedAt) return;
+    const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+    $('timeValue').textContent = fmtTime(elapsed);
+
+    if (totalDistance >= 0.05) {
+      const spk = elapsed / totalDistance; // detik per km
+      let min = Math.floor(spk / 60);
+      let sec = Math.round(spk % 60);
+      if (sec === 60) { min += 1; sec = 0; }
+      $('paceValue').textContent = min + ':' + String(sec).padStart(2, '0');
+    } else {
+      $('paceValue').textContent = '--:--';
+    }
+  }
+
+  // Layar dijaga tetap menyala selama lari
+  async function requestWakeLock() {
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLock = await navigator.wakeLock.request('screen');
+      }
+    } catch (e) { /* tidak wajib */ }
+  }
+  function releaseWakeLock() {
+    if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && watchId !== null) requestWakeLock();
+  });
+
+  // =====================================================
+  // Bluetooth BLE (ZL02D)
+  // =====================================================
+  function setBt(state, text) {
+    $('btDot').dataset.s = state;
+    $('btStatus').textContent = text;
+    const name = (bluetoothDevice && bluetoothDevice.name) || 'ZL02D';
+    $('btChipText').textContent =
+      state === 'on' ? name + ' terhubung' :
+      state === 'busy' ? 'Menghubungkan...' :
+      'Hubungkan smartwatch';
+  }
+
+  async function connectHeartRateSensor(useSaved) {
+    const targetMac = $('macInput').value.trim();
+
+    if (!navigator.bluetooth) {
+      setBt('err', 'Browser ini tidak mendukung Web Bluetooth. Gunakan Chrome di Android dan buka lewat HTTPS.');
+      return;
+    }
+
+    try {
+      setBt('busy', 'Memindai...');
+
+      if (useSaved && navigator.bluetooth.getDevices) {
+        const pairedDevices = await navigator.bluetooth.getDevices();
+        const matched = pairedDevices.find((d) => d.name === 'ZL02D' || d.id === targetMac);
+        if (!matched) {
+          setBt('err', 'Belum ada perangkat tersimpan. Gunakan "Pindai dan hubungkan" terlebih dahulu.');
+          return;
+        }
+        bluetoothDevice = matched;
+      } else {
+        bluetoothDevice = await navigator.bluetooth.requestDevice({
+          acceptAllDevices: true,
+          optionalServices: ['heart_rate']
+        });
+      }
+
+      if (targetMac) {
+        try { localStorage.setItem('saved_mac_address', targetMac); } catch (e) {}
+        $('savedMacInfo').textContent = targetMac;
+      }
+
+      bluetoothDevice.addEventListener('gattserverdisconnected', onDisconnected);
+      setBt('busy', 'Menghubungkan ke ' + (bluetoothDevice.name || 'ZL02D') + '...');
+
+      gattServer = await bluetoothDevice.gatt.connect();
+
+      setBt('on', 'Terhubung ke ' + (bluetoothDevice.name || 'ZL02D') + '.');
+      $('connectBtn').disabled = true;
+      $('reconnectBtn').disabled = true;
+      $('disconnectBtn').disabled = false;
+
+      await startListeningSensors(gattServer);
+      if ($('btDialog').open) $('btDialog').close();
+
+    } catch (error) {
+      console.error(error);
+      bluetoothDevice = null;
+      setBt('err', error.name === 'NotFoundError'
+        ? 'Pemilihan perangkat dibatalkan.'
+        : 'Gagal terhubung: ' + error.message);
+    }
+  }
+
+  function parseHeartRate(dv, uuid) {
+    if (dv.byteLength < 2) return null;
+    if (uuid === HR_MEASUREMENT) {
+      // Format standar BLE: bit 0 flag menentukan 8-bit atau 16-bit
+      const flags = dv.getUint8(0);
+      return (flags & 1) ? dv.getUint16(1, true) : dv.getUint8(1);
+    }
+    return dv.getUint8(1); // perangkat dengan karakteristik khusus
+  }
+
+  async function startListeningSensors(server) {
+    let subscribed = 0;
+    try {
+      const services = await server.getPrimaryServices();
+      for (const service of services) {
+        try {
+          const characteristics = await service.getCharacteristics();
+          for (const char of characteristics) {
+            if (char.properties.notify) {
+              await char.startNotifications();
+              subscribed++;
+              char.addEventListener('characteristicvaluechanged', (event) => {
+                const hr = parseHeartRate(event.target.value, char.uuid);
+                if (hr !== null && hr > 30 && hr < 220) pushHeartRate(hr);
+              });
             }
-            document.getElementById('gpsStatus').innerText = "Status GPS: " + pesan;
-            document.getElementById('startGpsBtn').disabled = false;
-            document.getElementById('stopGpsBtn').disabled = true;
-        }
+          }
+        } catch (e) { console.log(e); }
+      }
+    } catch (err) { console.error(err); }
 
-        function stopTracking() {
-            if (watchId !== null) {
-                navigator.geolocation.clearWatch(watchId);
-                watchId = null;
-            }
-            document.getElementById('gpsStatus').innerText = "Status GPS: Selesai / Tracking dihentikan.";
-            document.getElementById('startGpsBtn').disabled = false;
-            document.getElementById('stopGpsBtn').disabled = true;
-        }
+    if (subscribed === 0) {
+      setBt('err', 'Terhubung, tetapi perangkat tidak mengirim data detak jantung.');
+    }
+  }
 
-        function calculateDistance(lat1, lon1, lat2, lon2) {
-            const R = 6371;
-            const dLat = (lat2 - lat1) * Math.PI / 180;
-            const dLon = (lon2 - lon1) * Math.PI / 180;
-            const a = 
-                Math.sin(dLat/2) * Math.sin(dLat/2) +
-                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
-                Math.sin(dLon/2) * Math.sin(dLon/2);
-            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-            return R * c;
-        }
+  function pushHeartRate(hr) {
+    $('hrValue').textContent = hr;
+    const beat = $('beat');
+    beat.style.setProperty('--beat', (60 / hr).toFixed(2) + 's');
+    beat.classList.add('live');
+    hrSamples.push({ t: Date.now(), v: hr });
+    drawTrace();
+  }
 
-        // ==========================================
-        // FITUR 2: LOGIKA BLUETOOTH BLE (ZL02D)
-        // ==========================================
-        async function connectHeartRateSensor(useTargetMac = false) {
-            const targetMac = document.getElementById('macInput').value.trim();
+  function disconnectDevice() {
+    if (bluetoothDevice && bluetoothDevice.gatt.connected) {
+      bluetoothDevice.gatt.disconnect();
+    } else {
+      onDisconnected();
+    }
+  }
 
-            try {
-                document.getElementById('btStatus').innerText = "Status BT: Memindai...";
+  function onDisconnected() {
+    setBt('off', 'Terputus.');
+    $('hrValue').textContent = '--';
+    $('beat').classList.remove('live');
+    hrSamples.length = 0;
+    drawTrace();
+    $('connectBtn').disabled = false;
+    $('reconnectBtn').disabled = false;
+    $('disconnectBtn').disabled = true;
+  }
 
-                if (useTargetMac && navigator.bluetooth.getDevices) {
-                    const pairedDevices = await navigator.bluetooth.getDevices();
-                    const matched = pairedDevices.find(d => d.name === "ZL02D" || d.id === targetMac);
-                    if (matched) {
-                        bluetoothDevice = matched;
-                    } else {
-                        alert("Perangkat belum tersimpan di memori browser. Silakan klik 'Scan & Hubungkan Bluetooth' terlebih dahulu.");
-                        return;
-                    }
-                } else {
-                    bluetoothDevice = await navigator.bluetooth.requestDevice({
-                        acceptAllDevices: true,
-                        optionalServices: ['heart_rate', 0x180d]
-                    });
-                }
+  // =====================================================
+  // Grafik detak jantung (90 detik terakhir, bergulir)
+  // =====================================================
+  function drawTrace() {
+    const c = $('hrTrace');
+    const w = c.clientWidth, h = c.clientHeight;
+    if (!w || !h) return;
 
-                if (targetMac) {
-                    localStorage.setItem('saved_mac_address', targetMac);
-                    document.getElementById('savedMacInfo').innerText = targetMac;
-                }
+    const dpr = window.devicePixelRatio || 1;
+    if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+      c.width = Math.round(w * dpr);
+      c.height = Math.round(h * dpr);
+    }
+    const ctx = c.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
 
-                bluetoothDevice.addEventListener('gattserverdisconnected', onDisconnected);
-                document.getElementById('btStatus').innerText = `Menghubungkan ke ${bluetoothDevice.name || 'ZL02D'}...`;
+    const cs = getComputedStyle(document.documentElement);
+    const lineColor = cs.getPropertyValue('--line').trim();
+    const muteColor = cs.getPropertyValue('--mute').trim();
+    const pulseColor = cs.getPropertyValue('--pulse').trim();
 
-                gattServer = await bluetoothDevice.gatt.connect();
-                
-                document.getElementById('btStatus').innerText = "Status BT: Terhubung";
-                document.getElementById('deviceName').innerText = bluetoothDevice.name || "ZL02D";
-                document.getElementById('connectBtn').disabled = true;
-                document.getElementById('reconnectBtn').disabled = true;
-                document.getElementById('disconnectBtn').disabled = false;
+    // Garis bantu horizontal
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 1;
+    for (let i = 1; i < 4; i++) {
+      const y = Math.round(h * i / 4) + 0.5;
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    }
 
-                startListeningSensors(gattServer);
+    const now = Date.now();
+    while (hrSamples.length && now - hrSamples[0].t > HR_WINDOW) hrSamples.shift();
 
-            } catch (error) {
-                console.error(error);
-                document.getElementById('btStatus').innerText = "Status BT: Gagal / Dibatalkan";
-            }
-        }
+    if (hrSamples.length < 2) {
+      ctx.setLineDash([4, 6]);
+      ctx.strokeStyle = muteColor;
+      ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke();
+      ctx.setLineDash([]);
+      return;
+    }
 
-        async function startListeningSensors(server) {
-            try {
-                const services = await server.getPrimaryServices();
-                for (const service of services) {
-                    try {
-                        const characteristics = await service.getCharacteristics();
-                        for (const char of characteristics) {
-                            if (char.properties.notify) {
-                                await char.startNotifications();
-                                char.addEventListener('characteristicvaluechanged', (event) => {
-                                    const val = event.target.value;
-                                    if (val.byteLength > 1) {
-                                        let hr = val.getUint8(1);
-                                        if (hr > 30 && hr < 220) {
-                                            document.getElementById('hrValue').innerText = hr;
-                                        }
-                                    }
-                                });
-                            }
-                        }
-                    } catch (e) { console.log(e); }
-                }
-            } catch (err) { console.error(err); }
-        }
+    let min = Infinity, max = -Infinity;
+    for (const s of hrSamples) { min = Math.min(min, s.v); max = Math.max(max, s.v); }
+    if (max - min < 20) { const mid = (max + min) / 2; min = mid - 10; max = mid + 10; }
 
-        function disconnectDevice() {
-            if (bluetoothDevice && bluetoothDevice.gatt.connected) {
-                bluetoothDevice.gatt.disconnect();
-            } else {
-                onDisconnected();
-            }
-        }
+    const pad = 10;
+    const X = (t) => w - ((now - t) / HR_WINDOW) * w;
+    const Y = (v) => h - pad - ((v - min) / (max - min)) * (h - pad * 2);
 
-        function onDisconnected() {
-            document.getElementById('btStatus').innerText = "Status BT: Terputus";
-            document.getElementById('hrValue').innerText = "--";
-            document.getElementById('connectBtn').disabled = false;
-            document.getElementById('reconnectBtn').disabled = false;
-            document.getElementById('disconnectBtn').disabled = true;
-        }
-    </script>
+    ctx.strokeStyle = pulseColor;
+    ctx.lineWidth = 3;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    hrSamples.forEach((s, i) => { if (i) ctx.lineTo(X(s.t), Y(s.v)); else ctx.moveTo(X(s.t), Y(s.v)); });
+    ctx.stroke();
+
+    const last = hrSamples[hrSamples.length - 1];
+    ctx.fillStyle = pulseColor;
+    ctx.beginPath(); ctx.arc(X(last.t), Y(last.v), 5, 0, Math.PI * 2); ctx.fill();
+  }
+</script>
 </body>
 </html>
