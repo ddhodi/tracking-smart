@@ -210,6 +210,7 @@
       <button class="btn ghost" id="reconnectBtn" type="button">Hubungkan langsung (tersimpan)</button>
       <button class="btn danger" id="disconnectBtn" type="button" disabled>Putuskan Bluetooth</button>
     </div>
+    <p class="hint">Jam harus mendukung detak jantung standar Bluetooth (BLE). Pada banyak jam, fitur "Heart rate broadcast" atau mode olahraga perlu dinyalakan dulu agar data dikirim terus-menerus.</p>
     <p class="bt-status" id="btStatus" role="status" aria-live="polite">Terputus.</p>
   </div>
 </dialog>
@@ -224,6 +225,9 @@
   const HR_MEASUREMENT = '00002a37-0000-1000-8000-00805f9b34fb';
   const HR_WINDOW = 90000; // grafik menampilkan 90 detik terakhir
   const hrSamples = [];
+  const HR_STALE_MS = 15000; // tanpa data selama ini = anggap jam berhenti mengirim
+  let btState = 'off';
+  let lastHrAt = 0, hrWatchdog = null;
 
   // --- GPS & peta ---
   let map = null, trackCasing = null, trackLine = null, posMarker = null, startMarker = null;
@@ -466,12 +470,14 @@
   // Bluetooth BLE (smartwatch apa pun yang mengirim detak jantung)
   // =====================================================
   function setBt(state, text) {
-    $('btDot').dataset.s = state;
+    btState = state;
+    $('btDot').dataset.s = state === 'wait' ? 'busy' : state;
     $('btStatus').textContent = text;
     const name = (bluetoothDevice && bluetoothDevice.name) || 'Smartwatch';
     $('btChipText').textContent =
       state === 'on' ? name + ' terhubung' :
       state === 'busy' ? 'Menghubungkan...' :
+      state === 'wait' ? 'Menunggu detak jantung...' :
       'Hubungkan smartwatch';
   }
 
@@ -524,8 +530,8 @@
       $('reconnectBtn').disabled = true;
       $('disconnectBtn').disabled = false;
 
-      await startListeningSensors(gattServer);
-      if ($('btDialog').open) $('btDialog').close();
+      const ok = await startListeningSensors(gattServer);
+      if (ok && $('btDialog').open) $('btDialog').close();
 
     } catch (error) {
       console.error(error);
@@ -536,43 +542,53 @@
     }
   }
 
-  function parseHeartRate(dv, uuid) {
+  // Format standar Bluetooth SIG (Heart Rate Measurement, 0x2A37).
+  // Dipakai semua jam/sensor yang mengikuti standar BLE.
+  function parseHeartRate(dv) {
     if (dv.byteLength < 2) return null;
-    if (uuid === HR_MEASUREMENT) {
-      // Format standar BLE: bit 0 flag menentukan 8-bit atau 16-bit
-      const flags = dv.getUint8(0);
-      return (flags & 1) ? dv.getUint16(1, true) : dv.getUint8(1);
-    }
-    return dv.getUint8(1); // perangkat dengan karakteristik khusus
+    const flags = dv.getUint8(0);
+    return (flags & 1) ? dv.getUint16(1, true) : dv.getUint8(1);
   }
 
   async function startListeningSensors(server) {
-    let subscribed = 0;
     try {
-      const services = await server.getPrimaryServices();
-      for (const service of services) {
-        try {
-          const characteristics = await service.getCharacteristics();
-          for (const char of characteristics) {
-            if (char.properties.notify) {
-              await char.startNotifications();
-              subscribed++;
-              char.addEventListener('characteristicvaluechanged', (event) => {
-                const hr = parseHeartRate(event.target.value, char.uuid);
-                if (hr !== null && hr > 30 && hr < 220) pushHeartRate(hr);
-              });
-            }
-          }
-        } catch (e) { console.log(e); }
-      }
-    } catch (err) { console.error(err); }
-
-    if (subscribed === 0) {
-      setBt('err', 'Terhubung, tetapi perangkat tidak mengirim data detak jantung.');
+      const service = await server.getPrimaryService('heart_rate');
+      const char = await service.getCharacteristic('heart_rate_measurement');
+      char.addEventListener('characteristicvaluechanged', (event) => {
+        const hr = parseHeartRate(event.target.value);
+        if (hr !== null && hr > 30 && hr < 220) pushHeartRate(hr);
+      });
+      await char.startNotifications();
+      lastHrAt = Date.now();
+      startHrWatchdog();
+      setBt('wait', 'Terhubung. Menunggu data detak jantung dari jam. Jika lama tidak muncul, nyalakan "Heart rate broadcast" atau mulai mode olahraga di jam.');
+      return true;
+    } catch (err) {
+      console.error(err);
+      setBt('err', 'Terhubung, tetapi jam ini tidak menyediakan layanan detak jantung standar BLE (0x180D). Jam jenis ini memakai protokol khusus pabrikan dan tidak bisa dibaca browser. Coba aktifkan mode broadcast/olahraga di jam, lalu hubungkan ulang.');
+      return false;
     }
   }
 
+  // Deteksi jam yang terhubung tetapi berhenti mengirim data
+  function startHrWatchdog() {
+    clearInterval(hrWatchdog);
+    hrWatchdog = setInterval(() => {
+      if (btState !== 'on') return;
+      if (Date.now() - lastHrAt > HR_STALE_MS) {
+        $('hrValue').textContent = '--';
+        $('beat').classList.remove('live');
+        setBt('wait', 'Terhubung, tetapi tidak ada data detak jantung baru. Nyalakan "Heart rate broadcast" atau mulai mode olahraga di jam.');
+      }
+    }, 3000);
+  }
+
   function pushHeartRate(hr) {
+    lastHrAt = Date.now();
+    if (btState !== 'on') {
+      const n = (bluetoothDevice && bluetoothDevice.name) || 'jam';
+      setBt('on', 'Menerima data detak jantung dari ' + n + '.');
+    }
     $('hrValue').textContent = hr;
     const beat = $('beat');
     beat.style.setProperty('--beat', (60 / hr).toFixed(2) + 's');
@@ -590,6 +606,7 @@
   }
 
   function onDisconnected() {
+    clearInterval(hrWatchdog);
     setBt('off', 'Terputus.');
     $('hrValue').textContent = '--';
     $('beat').classList.remove('live');
