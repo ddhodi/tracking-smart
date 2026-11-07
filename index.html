@@ -59,7 +59,7 @@
   /* ---------- Peta ---------- */
   #map { position: fixed; inset: 0 0 var(--sheet-h, 320px) 0; z-index: 0; }
   .leaflet-container { font-family: var(--sans); }
-  .leaflet-control-attribution { background: transparent !important; box-shadow: none; font-size: 9px; opacity: .6; margin-top: calc(72px + env(safe-area-inset-top)) !important; }
+  .leaflet-control-attribution { background: transparent !important; box-shadow: none; font-size: 9px; opacity: .6; margin-top: calc(124px + env(safe-area-inset-top)) !important; }
 
   /* ---------- Bar atas ---------- */
   .topbar {
@@ -148,6 +148,21 @@
   .sheet[data-paused="true"] .trace,
   .sheet[data-paused="true"] .m b { opacity: .5; }
 
+  /* ---------- Riwayat dan tombol ikuti posisi ---------- */
+  .hist-btn { position: fixed; z-index: 1100; right: 12px; top: calc(66px + env(safe-area-inset-top)); }
+  .locate { position: fixed; z-index: 1100; right: 12px; bottom: calc(var(--sheet-h, 320px) + 12px); }
+  .locate[hidden] { display: none; }
+  .dlg-head + .hint { margin-top: 18px; }
+  .hist-list { list-style: none; padding: 0; margin: 14px 0 0; max-height: 55vh; overflow-y: auto; }
+  .hist-item { padding: 12px 0; border-top: 1px solid var(--line); }
+  .hist-item:first-child { border-top: 0; }
+  .hist-when { font-size: 13px; color: var(--mute); }
+  .hist-stats { margin-top: 2px; font: 700 26px/1.15 var(--display); font-variant-numeric: tabular-nums; }
+  .hist-acts { display: flex; gap: 8px; margin-top: 4px; }
+  .hist-acts .link:disabled { opacity: .35; cursor: not-allowed; }
+  .hist-acts .del { margin-left: auto; color: var(--pulse); }
+  .hist-empty { margin-top: 18px; font-size: 14px; line-height: 1.4; color: var(--mute); }
+
   /* ---------- Dialog Bluetooth ---------- */
   dialog {
     width: 100%; max-width: 560px; margin: auto auto 0;
@@ -197,6 +212,8 @@
   </div>
 </header>
 <button class="pill install" id="installBtn" type="button" hidden>Pasang aplikasi</button>
+<button class="pill hist-btn" id="histBtn" type="button" aria-haspopup="dialog">Riwayat</button>
+<button class="pill locate" id="locateBtn" type="button" hidden>Ikuti posisi</button>
 
 <main class="sheet" id="sheet">
   <section class="hr" aria-label="Detak jantung">
@@ -214,7 +231,7 @@
   </section>
 
   <div class="foot">
-    <span id="gpsStatus" aria-live="polite">Pastikan izin lokasi aktif sebelum mulai.</span>
+    <span id="gpsStatus" aria-live="polite">Pastikan izin lokasi aktif dan biarkan layar tetap menyala selama lari.</span>
     <span class="pts"><span id="pointCount">0</span> titik</span>
   </div>
 
@@ -231,9 +248,7 @@
       <button class="link" id="btClose" type="button">Tutup</button>
     </div>
 
-    <label for="macInput">MAC address (opsional, hanya catatan)</label>
-    <input type="text" id="macInput" value="" placeholder="AA:BB:CC:DD:EE:FF" inputmode="text" autocapitalize="characters" autocomplete="off" spellcheck="false">
-    <p class="hint">Perangkat terakhir: <span id="savedMacInfo">belum ada</span>. Browser tidak bisa memilih perangkat lewat MAC, jadi pilih jam kamu dari daftar saat memindai.</p>
+    <p class="hint">Perangkat terakhir: <span id="savedDevInfo">belum ada</span>. Pilih jam kamu dari daftar saat memindai.</p>
 
     <div class="btns">
       <button class="btn" id="connectBtn" type="button">Pindai dan hubungkan</button>
@@ -242,6 +257,18 @@
     </div>
     <p class="hint">Jam harus mendukung detak jantung standar Bluetooth (BLE). Pada banyak jam, fitur "Heart rate broadcast" atau mode olahraga perlu dinyalakan dulu agar data dikirim terus-menerus.</p>
     <p class="bt-status" id="btStatus" role="status" aria-live="polite">Terputus.</p>
+  </div>
+</dialog>
+
+<dialog id="histDialog" aria-labelledby="histTitle">
+  <div class="dlg">
+    <div class="dlg-head">
+      <h2 id="histTitle">Riwayat</h2>
+      <button class="link" id="histClose" type="button">Tutup</button>
+    </div>
+    <p class="hist-empty" id="histEmpty" hidden></p>
+    <ul class="hist-list" id="histList"></ul>
+    <p class="hint">Disimpan di browser ini saja. Ekspor GPX untuk cadangan, atau untuk dibuka di Strava dan Garmin Connect.</p>
   </div>
 </dialog>
 
@@ -271,6 +298,15 @@
   let segments = [[]];              // rute dipecah per jeda supaya tidak ada garis lurus lintas jeda
   let isNewSegment = false;
   let hrFrozenAt = 0;               // waktu saat grafik detak jantung dibekukan (0 = tidak beku)
+  let following = true;             // peta mengikuti posisi; berhenti saat pengguna menggeser peta
+  let segLog = [[]];                // titik lengkap per segmen: {lat, lng, t, hr} untuk disimpan/ekspor
+  let lastFixTime = 0, rejectStreak = 0, hadGap = false;
+  let runHr = { sum: 0, n: 0, max: 0 };
+  let runStartedAt = 0;
+  const MAX_SPEED_MS = 12;          // di atas ini (m/s) dianggap lompatan GPS, bukan gerak lari
+  let manualDisconnect = false, reconnectCancel = false, reconnecting = false;
+  const RECONNECT_TRIES = 8;
+  let hiddenAt = 0;
 
   // =====================================================
   // Inisialisasi
@@ -290,11 +326,18 @@
     trackLine   = L.polyline([], { color: '#1D4ED8', weight: 6, lineCap: 'round', lineJoin: 'round' }).addTo(map);
 
     try {
-      const savedMac = localStorage.getItem('saved_mac_address');
-      if (savedMac) $('macInput').value = savedMac;
       const lastName = localStorage.getItem('last_device_name');
-      if (lastName) $('savedMacInfo').textContent = lastName;
+      if (lastName) $('savedDevInfo').textContent = lastName;
     } catch (e) { /* storage bisa diblokir */ }
+
+    // Pengguna menggeser peta = berhenti mengikuti posisi sampai tombol "Ikuti posisi" ditekan
+    map.on('dragstart', () => { if (runState !== 'idle' && posMarker) setFollowing(false); });
+
+    if (!navigator.bluetooth) {
+      setBt('err', 'Browser ini tidak mendukung Web Bluetooth (iPhone/Safari tidak bisa). Gunakan Chrome di Android. GPS tetap berfungsi tanpa jam.');
+      $('connectBtn').disabled = true;
+      $('reconnectBtn').disabled = true;
+    }
 
     // Tinggi panel menentukan tinggi peta
     const ro = new ResizeObserver(() => {
@@ -366,6 +409,7 @@
     btn.textContent = state === 'running' ? 'Jeda' : state === 'paused' ? 'Lanjut' : 'Mulai lari';
     $('finishBtn').hidden = state === 'idle';
     $('sheet').dataset.paused = String(state === 'paused');
+    $('locateBtn').hidden = following || state === 'idle' || !posMarker;
   }
 
   function beginGpsWatch() {
@@ -385,7 +429,12 @@
 
     trackCoordinates = [];
     segments = [[]];
+    segLog = [[]];
     isNewSegment = false;
+    lastFixTime = 0; rejectStreak = 0; hadGap = false;
+    runHr = { sum: 0, n: 0, max: 0 };
+    runStartedAt = Date.now();
+    following = true;
     totalDistance = 0;
     trackCasing.setLatLngs([]);
     trackLine.setLatLngs([]);
@@ -460,22 +509,39 @@
       $('gpsStatus').textContent = 'Sinyal masih lemah, menunggu akurasi di bawah 20 m.';
       return;
     }
-    setGpsPill('ok', 'GPS ±' + Math.round(accuracy) + ' m');
+    setGpsPill('on', 'GPS ±' + Math.round(accuracy) + ' m');
+    const fixTime = position.timestamp || Date.now();
 
+    let stepKm = 0;
     if (trackCoordinates.length > 0 && !isNewSegment) {
       const prev = trackCoordinates[trackCoordinates.length - 1];
       const d = calculateDistance(prev[0], prev[1], lat, lng); // km
 
-      // 2. Filter jitter: catat hanya jika bergeser lebih dari 3 m
-      if (d < 0.003) return;
+      // 2. Filter jitter: geseran harus lebih dari 3 m DAN lebih dari separuh akurasi GPS saat ini,
+      //    supaya goyangan sinyal saat diam atau jalan pelan tidak dihitung sebagai jarak
+      if (d < Math.max(0.003, accuracy * 0.0005)) return;
 
-      totalDistance += d;
+      // 3. Filter lompatan: kecepatan tidak masuk akal dianggap glitch. Kalau 5 titik berturut-turut
+      //    ditolak, anggap posisi memang pindah (mulai segmen baru, jarak lompatan tidak dihitung).
+      const dt = (fixTime - lastFixTime) / 1000;
+      if (dt > 0 && (d * 1000) / dt > MAX_SPEED_MS) {
+        if (++rejectStreak < 5) return;
+        isNewSegment = true;
+      } else {
+        stepKm = d;
+      }
+    }
+    rejectStreak = 0;
+    if (stepKm) {
+      totalDistance += stepKm;
       $('distanceValue').textContent = totalDistance.toFixed(2);
     }
 
     // Setelah jeda mulai segmen rute baru (jarak selama jeda tidak dihitung)
-    if (isNewSegment) { segments.push([]); isNewSegment = false; }
+    if (isNewSegment) { segments.push([]); segLog.push([]); isNewSegment = false; }
     segments[segments.length - 1].push(newLatLng);
+    segLog[segLog.length - 1].push({ lat: lat, lng: lng, t: fixTime, hr: currentHr() });
+    lastFixTime = fixTime;
     trackCoordinates.push(newLatLng);
     trackCasing.setLatLngs(segments);
     trackLine.setLatLngs(segments);
@@ -486,10 +552,10 @@
       map.setView(newLatLng, 17);
     } else {
       posMarker.setLatLng(newLatLng);
-      map.panTo(newLatLng); // zoom tidak dipaksa agar pengguna bebas memperbesar peta
+      if (following) map.panTo(newLatLng); // zoom tidak dipaksa; menggeser peta menghentikan pengikutan
     }
 
-    $('gpsStatus').textContent = 'Merekam rute lari.';
+    $('gpsStatus').textContent = 'Merekam rute lari.' + (hadGap ? ' Ada celah data saat aplikasi di latar belakang.' : '');
     $('pointCount').textContent = trackCoordinates.length;
     tick();
   }
@@ -535,10 +601,22 @@
     const elapsed = Math.floor(getElapsedMs() / 1000);
     endSession();
     setGpsPill('off', 'GPS siap');
-    $('gpsStatus').textContent = 'Selesai: ' + totalDistance.toFixed(2) + ' km dalam ' + fmtTime(elapsed) + '.';
+    const summary = 'Selesai: ' + totalDistance.toFixed(2) + ' km dalam ' + fmtTime(elapsed) + '.';
+    $('gpsStatus').textContent = summary;
     if (trackCoordinates.length > 1) {
       map.fitBounds(trackLine.getBounds(), { padding: [40, 40] });
+      saveRun(buildRun(elapsed))
+        .then(() => { $('gpsStatus').textContent = summary + ' Tersimpan di Riwayat.'; })
+        .catch(() => { $('gpsStatus').textContent = summary + ' Gagal menyimpan ke Riwayat.'; });
     }
+  }
+
+  // Detak jantung terbaru untuk ditempelkan ke titik rute (kosong jika data sudah basi)
+  function currentHr() {
+    if (btState === 'on' && hrSamples.length && Date.now() - lastHrAt < 10000) {
+      return hrSamples[hrSamples.length - 1].v;
+    }
+    return null;
   }
 
   function calculateDistance(lat1, lon1, lat2, lon2) {
@@ -595,8 +673,19 @@
     if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
   }
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && runState === 'running') requestWakeLock();
+    if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+    if (runState === 'running') {
+      requestWakeLock();
+      if (hiddenAt && Date.now() - hiddenAt > 5000) hadGap = true; // browser bisa menghentikan GPS/BLE di latar
+    }
+    hiddenAt = 0;
   });
+
+  function setFollowing(on) {
+    following = on;
+    $('locateBtn').hidden = on || runState === 'idle' || !posMarker;
+    if (on && posMarker) map.panTo(posMarker.getLatLng());
+  }
 
   // =====================================================
   // Bluetooth BLE (smartwatch apa pun yang mengirim detak jantung)
@@ -615,8 +704,6 @@
   }
 
   async function connectHeartRateSensor(useSaved) {
-    const targetMac = $('macInput').value.trim();
-
     if (!navigator.bluetooth) {
       setBt('err', 'Browser ini tidak mendukung Web Bluetooth. Gunakan Chrome di Android dan buka lewat HTTPS.');
       return;
@@ -645,7 +732,9 @@
 
       const devName = bluetoothDevice.name || 'Smartwatch';
 
-      bluetoothDevice.addEventListener('gattserverdisconnected', onDisconnected);
+      manualDisconnect = false;
+      reconnectCancel = false;
+      bluetoothDevice.addEventListener('gattserverdisconnected', onGattDisconnected);
       setBt('busy', 'Menghubungkan ke ' + devName + '...');
 
       gattServer = await bluetoothDevice.gatt.connect();
@@ -654,9 +743,8 @@
       try {
         localStorage.setItem('last_device_id', bluetoothDevice.id);
         localStorage.setItem('last_device_name', devName);
-        if (targetMac) localStorage.setItem('saved_mac_address', targetMac);
       } catch (e) {}
-      $('savedMacInfo').textContent = devName;
+      $('savedDevInfo').textContent = devName;
 
       setBt('on', 'Terhubung ke ' + devName + '.');
       $('connectBtn').disabled = true;
@@ -719,6 +807,10 @@
   function pushHeartRate(hr) {
     if (runState === 'paused') return; // data diabaikan selama jeda
     lastHrAt = Date.now();
+    if (runState === 'running') {
+      runHr.sum += hr; runHr.n++;
+      if (hr > runHr.max) runHr.max = hr;
+    }
     if (btState !== 'on') {
       const n = (bluetoothDevice && bluetoothDevice.name) || 'jam';
       setBt('on', 'Menerima data detak jantung dari ' + n + '.');
@@ -731,10 +823,42 @@
     drawTrace();
   }
 
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Jam putus tanpa diminta pengguna: coba sambung lagi beberapa kali, grafik tetap dipertahankan
+  function onGattDisconnected() {
+    if (manualDisconnect) { manualDisconnect = false; onDisconnected(); return; }
+    autoReconnect();
+  }
+
+  async function autoReconnect() {
+    if (reconnecting || !bluetoothDevice) return;
+    reconnecting = true;
+    reconnectCancel = false;
+    clearInterval(hrWatchdog);
+    $('hrValue').textContent = '--';
+    $('beat').classList.remove('live');
+    for (let i = 1; i <= RECONNECT_TRIES; i++) {
+      setBt('busy', 'Jam terputus. Menyambung ulang (' + i + '/' + RECONNECT_TRIES + ')...');
+      await sleep(Math.min(1500 * i, 8000));
+      if (reconnectCancel || !bluetoothDevice) break;
+      try {
+        gattServer = await bluetoothDevice.gatt.connect();
+        if (await startListeningSensors(gattServer)) { reconnecting = false; return; }
+      } catch (e) { /* coba lagi */ }
+      if (reconnectCancel) break;
+    }
+    reconnecting = false;
+    onDisconnected();
+  }
+
   function disconnectDevice() {
+    reconnectCancel = true;
     if (bluetoothDevice && bluetoothDevice.gatt.connected) {
+      manualDisconnect = true;
       bluetoothDevice.gatt.disconnect();
     } else {
+      manualDisconnect = false;
       onDisconnected();
     }
   }
@@ -812,6 +936,159 @@
     ctx.fillStyle = pulseColor;
     ctx.beginPath(); ctx.arc(X(last.t), Y(last.v), 5, 0, Math.PI * 2); ctx.fill();
   }
+
+  // =====================================================
+  // Riwayat lari (IndexedDB) dan ekspor GPX
+  // =====================================================
+  const DB_NAME = 'trackline', STORE = 'runs';
+
+  function dbTx(mode, fn) {
+    return new Promise((resolve, reject) => {
+      if (!window.indexedDB) { reject(new Error('IndexedDB tidak tersedia')); return; }
+      const open = indexedDB.open(DB_NAME, 1);
+      open.onupgradeneeded = () => open.result.createObjectStore(STORE, { keyPath: 'id' });
+      open.onerror = () => reject(open.error);
+      open.onsuccess = () => {
+        const db = open.result;
+        const tx = db.transaction(STORE, mode);
+        const req = fn(tx.objectStore(STORE));
+        tx.oncomplete = () => { db.close(); resolve(req ? req.result : undefined); };
+        tx.onerror = tx.onabort = () => { db.close(); reject(tx.error); };
+      };
+    });
+  }
+  const saveRun = (run) => dbTx('readwrite', (s) => s.put(run));
+  const deleteRun = (id) => dbTx('readwrite', (s) => s.delete(id));
+  const listRuns = () => dbTx('readonly', (s) => s.getAll())
+    .then((r) => (r || []).sort((a, b) => b.startedAt - a.startedAt));
+
+  function buildRun(elapsedSec) {
+    return {
+      id: runStartedAt,
+      startedAt: runStartedAt,
+      durationSec: elapsedSec,
+      distanceKm: totalDistance,
+      avgHr: runHr.n ? Math.round(runHr.sum / runHr.n) : null,
+      maxHr: runHr.n ? runHr.max : null,
+      segments: segLog.filter((s) => s.length)
+    };
+  }
+
+  function fmtPace(sec, km) {
+    if (km < 0.05) return '--:--';
+    const spk = sec / km;
+    let m = Math.floor(spk / 60), s = Math.round(spk % 60);
+    if (s === 60) { m += 1; s = 0; }
+    return m + ':' + String(s).padStart(2, '0');
+  }
+
+  function fmtWhen(ms) {
+    return new Date(ms).toLocaleString('id-ID', {
+      weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+  }
+
+  function mk(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  function historyItem(run) {
+    const li = mk('li', 'hist-item');
+    li.appendChild(mk('div', 'hist-when', fmtWhen(run.startedAt)));
+    const parts = [run.distanceKm.toFixed(2) + ' km', fmtTime(run.durationSec), fmtPace(run.durationSec, run.distanceKm) + '/km'];
+    if (run.avgHr) parts.push('HR ' + run.avgHr + ' (maks ' + run.maxHr + ')');
+    li.appendChild(mk('div', 'hist-stats', parts.join(' · ')));
+
+    const acts = mk('div', 'hist-acts');
+    const view = mk('button', 'link', 'Lihat di peta');
+    view.type = 'button';
+    view.disabled = runState !== 'idle';
+    view.addEventListener('click', () => showRun(run));
+    const gpx = mk('button', 'link', 'Ekspor GPX');
+    gpx.type = 'button';
+    gpx.addEventListener('click', () => downloadGpx(run));
+    const del = mk('button', 'link del', 'Hapus');
+    del.type = 'button';
+    del.addEventListener('click', async () => {
+      if (!confirm('Hapus lari ini dari Riwayat?')) return;
+      try { await deleteRun(run.id); } catch (e) { /* abaikan */ }
+      renderHistory();
+    });
+    acts.append(view, gpx, del);
+    li.appendChild(acts);
+    return li;
+  }
+
+  async function renderHistory() {
+    const list = $('histList'), empty = $('histEmpty');
+    list.replaceChildren();
+    let runs;
+    try {
+      runs = await listRuns();
+    } catch (e) {
+      empty.textContent = 'Riwayat tidak bisa dibuka di browser ini (penyimpanan diblokir?).';
+      empty.hidden = false;
+      return;
+    }
+    empty.textContent = 'Belum ada lari tersimpan. Lari yang kamu selesaikan akan muncul di sini.';
+    empty.hidden = runs.length > 0;
+    runs.forEach((r) => list.appendChild(historyItem(r)));
+  }
+
+  function showRun(run) {
+    if (runState !== 'idle') return;
+    if (posMarker) { map.removeLayer(posMarker); posMarker = null; }
+    if (startMarker) { map.removeLayer(startMarker); startMarker = null; }
+    const lines = run.segments.map((seg) => seg.map((p) => [p.lat, p.lng]));
+    trackCasing.setLatLngs(lines);
+    trackLine.setLatLngs(lines);
+    $('distanceValue').textContent = run.distanceKm.toFixed(2);
+    $('timeValue').textContent = fmtTime(run.durationSec);
+    $('paceValue').textContent = fmtPace(run.durationSec, run.distanceKm);
+    $('gpsStatus').textContent = 'Menampilkan lari ' + fmtWhen(run.startedAt) + '.';
+    $('histDialog').close();
+    map.fitBounds(trackLine.getBounds(), { padding: [40, 40] });
+  }
+
+  function toGpx(run) {
+    const iso = (ms) => new Date(ms).toISOString();
+    let x = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+      '<gpx version="1.1" creator="Trackline" xmlns="http://www.topografix.com/GPX/1/1" ' +
+      'xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1">\n' +
+      '<metadata><time>' + iso(run.startedAt) + '</time></metadata>\n' +
+      '<trk><name>Lari ' + iso(run.startedAt) + '</name>\n';
+    run.segments.forEach((seg) => {
+      x += '<trkseg>\n';
+      seg.forEach((p) => {
+        x += '<trkpt lat="' + p.lat.toFixed(6) + '" lon="' + p.lng.toFixed(6) + '"><time>' + iso(p.t) + '</time>';
+        if (p.hr) x += '<extensions><gpxtpx:TrackPointExtension><gpxtpx:hr>' + p.hr + '</gpxtpx:hr></gpxtpx:TrackPointExtension></extensions>';
+        x += '</trkpt>\n';
+      });
+      x += '</trkseg>\n';
+    });
+    return x + '</trk>\n</gpx>\n';
+  }
+
+  function downloadGpx(run) {
+    const d = new Date(run.startedAt), p2 = (n) => String(n).padStart(2, '0');
+    const stamp = d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) + '-' + p2(d.getHours()) + p2(d.getMinutes());
+    const url = URL.createObjectURL(new Blob([toGpx(run)], { type: 'application/gpx+xml' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'trackline-' + stamp + '.gpx';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+
+  $('histBtn').addEventListener('click', () => { $('histDialog').showModal(); renderHistory(); });
+  $('histClose').addEventListener('click', () => $('histDialog').close());
+  $('histDialog').addEventListener('click', (e) => { if (e.target === $('histDialog')) $('histDialog').close(); });
+  $('locateBtn').addEventListener('click', () => setFollowing(true));
 </script>
 </body>
 </html>
